@@ -1,0 +1,33 @@
+import pandas as pd
+import sqlite3
+
+# Archivo limpio generado en el paso anterior
+ruta_csv = "data_limpia.csv"
+
+# Nombre de la base de datos (se crea sola si no existe)
+ruta_db = "educacion.db"
+
+# Nombre de la tabla
+tabla = "instituciones"
+
+# Leer CSV
+df = pd.read_csv(ruta_csv)
+
+print("Datos cargados:", df.shape)
+
+# Crear conexión (esto CREA la base automáticamente)
+conn = sqlite3.connect(ruta_db)
+
+# Cargar a SQLite
+df.to_sql(tabla, conn, if_exists="replace", index=False)
+
+print("\nTabla creada en SQLite:", tabla)
+
+# Verificar que sí se guardó
+consulta = f"SELECT COUNT(*) FROM {tabla}"
+total = conn.execute(consulta).fetchone()[0]
+
+print("Total registros en SQLite:", total)
+
+# Cerrar conexión
+conn.close()

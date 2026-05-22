@@ -1,0 +1,128 @@
+import pandas as pd
+import unicodedata
+import re
+import os
+
+carpeta = "data"
+archivos = [f for f in os.listdir(carpeta) if f.endswith(".csv")]
+
+def limpiar_texto(texto):
+    texto = str(texto).strip()
+    texto = texto.replace("\ufeff", "")
+    texto = texto.replace("\n", " ")
+    texto = texto.replace("\r", " ")
+    texto = " ".join(texto.split())
+    return texto
+
+def normalizar(texto):
+    texto = str(texto).lower()
+    texto = unicodedata.normalize("NFKD", texto)
+    texto = "".join(c for c in texto if not unicodedata.combining(c))
+    texto = re.sub(r"[^a-z0-9]", "", texto)
+    return texto
+
+def detectar_header(df_preview):
+    for i in range(len(df_preview)):
+        fila = df_preview.iloc[i].astype(str).tolist()
+        if any("sostenimiento" in str(x).lower() for x in fila) and \
+           any("nivel" in str(x).lower() for x in fila):
+            return i
+    return None
+
+dfs = []
+
+for archivo in archivos:
+    print(f"\nProcesando: {archivo}")
+    ruta = os.path.join(carpeta, archivo)
+
+    # detectar encoding
+    try:
+        preview = pd.read_csv(ruta, sep=";", nrows=20, encoding="utf-8-sig", header=None)
+        encoding_usado = "utf-8-sig"
+    except:
+        preview = pd.read_csv(ruta, sep=";", nrows=20, encoding="latin-1", header=None)
+        encoding_usado = "latin-1"
+
+    fila_header = detectar_header(preview)
+    if fila_header is None:
+        fila_header = 10
+
+    df = pd.read_csv(
+        ruta,
+        sep=";",
+        encoding=encoding_usado,
+        header=fila_header,
+        low_memory=False
+    )
+
+    filas_originales = df.shape[0]
+
+    # limpiar columnas
+    df.columns = [limpiar_texto(col) for col in df.columns]
+
+    # 🔥 MAPEO INCLUYENDO AMIE
+    columnas = {
+        "Año_Lectivo": "ano_lectivo",
+        "AMIE": "amie",
+        "Codigo AMIE": "amie",
+        "Código AMIE": "amie",
+        "Provincia": "provincia",
+        "Cantón": "canton",
+        "Parroquia": "parroquia",
+        "Sostenimiento": "sostenimiento",
+        "Área": "area",
+        "Nivel Educación": "nivel_educacion",
+        "Total_Estudiantes": "total_estudiantes"
+    }
+
+    nuevas_cols = {}
+    for col in df.columns:
+        for key in columnas:
+            if normalizar(col) == normalizar(key):
+                nuevas_cols[col] = columnas[key]
+
+    df = df.rename(columns=nuevas_cols)
+
+    columnas_necesarias = [
+        "ano_lectivo",
+        "amie",
+        "provincia",
+        "canton",
+        "parroquia",
+        "sostenimiento",
+        "area",
+        "nivel_educacion",
+        "total_estudiantes"
+    ]
+
+    df = df[[col for col in columnas_necesarias if col in df.columns]]
+
+    # limpiar texto
+    for col in ["amie", "provincia", "canton", "parroquia", "sostenimiento", "area", "nivel_educacion"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+
+    # convertir estudiantes a entero
+    if "total_estudiantes" in df.columns:
+        df["total_estudiantes"] = pd.to_numeric(df["total_estudiantes"], errors="coerce")
+        df["total_estudiantes"] = df["total_estudiantes"].fillna(0).astype(int)
+
+    # eliminar filas sin clave
+    df = df.dropna(subset=["provincia"])
+
+    filas_limpias = df.shape[0]
+
+    print(f"Filas originales: {filas_originales}")
+    print(f"Filas limpias: {filas_limpias}")
+    print(f"Filas eliminadas: {filas_originales - filas_limpias}")
+
+    dfs.append(df)
+
+# unir todo
+df_final = pd.concat(dfs, ignore_index=True)
+
+# guardar final
+df_final.to_csv("data_limpia.csv", index=False, encoding="utf-8-sig")
+
+print("\nPROCESO COMPLETADO")
+print("Filas totales finales:", df_final.shape[0])
