@@ -1,8 +1,4 @@
 """
-transform/bce.py
-Semana 2 - Limpieza de fuentes BCE
-Reto Pipeline Macroentorno Ecuador - UTPL - 4to ciclo
-
 Cinco funciones, una por fuente. Cada una recibe la ruta al archivo y
 devuelve un DataFrame de pandas ya limpio, listo para cargar a SQLite.
 
@@ -24,28 +20,7 @@ import numpy as np
 # 1. PIB REAL ANUAL
 # ---------------------------------------------------------------------------
 def limpiar_pib_real(ruta_retropolacion: str) -> pd.DataFrame:
-    """
-    Fuente: retropolacion_1965_2023_PIB real.xlsx, hoja 'PIB pc real'.
-
-    Por qué esta hoja y no otra: el reto pide una tabla con columnas
-    Años, PIB_musd, Población, PIB_percapita, Variacion_pct, serie desde 1965.
-    La hoja 'PIB pc real' es la única que trae las cinco cifras juntas
-    (PIB real total, población, PIB per cápita real y variación anual).
-    Las demás hojas del archivo (Serie VAB real, Serie Gasto real, etc.)
-    solo tienen el desglose sectorial, no la serie agregada con población.
-
-    Estructura cruda observada:
-    - Columnas sin nombre (Unnamed: 0 a Unnamed: 5).
-    - Unnamed: 0 está vacía en todas las filas (columna basura, se descarta).
-    - Las primeras ~4-5 filas son NaN (espacio del encabezado visual del Excel).
-    - Los datos reales viven en Unnamed: 1 (año), Unnamed: 2 (PIB real total),
-      Unnamed: 3 (población), Unnamed: 4 (PIB per cápita real),
-      Unnamed: 5 (variación % anual).
-    - Al final hay 3-4 filas de texto (notas al pie, "Elaboración: BCE") que
-      hay que descartar.
-    - El año viene como string y el último año incluye la marca "(p)"
-      de "provisional" (ej. "2023 (p)") que hay que limpiar.
-    """
+    
     df = pd.read_excel(ruta_retropolacion, sheet_name="PIB pc real", header=None)
 
     # Filtrar solo filas donde la columna 1 (año) hace match con un año de 4
@@ -105,22 +80,7 @@ def limpiar_pib_real(ruta_retropolacion: str) -> pd.DataFrame:
 # 2. PIB PER CÁPITA NOMINAL
 # ---------------------------------------------------------------------------
 def limpiar_pib_nominal(ruta_pib: str) -> pd.DataFrame:
-    """
-    Fuente: PIB.xlsx, hoja 'Hoja1'.
-
-    Estructura cruda observada:
-    - Columnas: AÑO, PIB 2018 = 100, VAR ANUAL PIB, PIB PER CÁPITA NOMINAL,
-      Unnamed: 4-7 (completamente vacías, basura), PIB 2018 = 100.1
-      (columna duplicada/repetida, basura).
-    - Solo nos interesan AÑO y PIB PER CÁPITA NOMINAL para esta función
-      (el reto pide únicamente Período + PIB_percapita_nominal_usd aquí;
-      el PIB real ya se obtiene de la función anterior).
-    - Al final del archivo hay 4 filas de texto con notas al pie
-      ("*(p) provisional...", "*PIB en millones de dólares", etc.)
-      que hay que descartar.
-    - El AÑO viene limpio como número en las filas de datos reales
-      (no trae "(p)" en esta hoja, a diferencia de la otra).
-    """
+    
     df = pd.read_excel(ruta_pib, sheet_name="Hoja1")
 
     # Quedarnos solo con filas donde AÑO es un año válido de 4 dígitos.
@@ -153,31 +113,7 @@ def limpiar_pib_nominal(ruta_pib: str) -> pd.DataFrame:
 # 3. VAB POR PROVINCIA E INDUSTRIA
 # ---------------------------------------------------------------------------
 def limpiar_vab(ruta_vab: str) -> pd.DataFrame:
-    """
-    Fuente: VAB 2018-2023.xlsx, hoja 'DATA'.
-
-    Estructura cruda observada:
-    - Columnas: AÑO, CÓDIGO PROVINCIA, PROVINCIA, CÓDIGO CANTÓN, CANTÓN,
-      SECTOR, VALOR. Ya viene en formato largo (una fila por
-      provincia-cantón-sector-año), no hace falta pivotar ni hacer melt().
-    - 20,893 filas, de las cuales las últimas 3 son basura:
-      2 filas completamente vacías + 1 fila de nota de texto
-      ("*Yo convertí a unidades de USD").
-    - Aunque el archivo se llama "2018-2023", en realidad contiene también
-      el año 2024 (se ve en las últimas filas de datos). Se conserva tal
-      cual viene; si tu tutor pide limitarlo estrictamente a 2018-2023,
-      hay que filtrar `anio <= 2023` explícitamente.
-    - CÓDIGO PROVINCIA y CÓDIGO CANTÓN vienen como float (101.0 en vez de
-      101) porque pandas los infiere así al haber NaNs en la columna;
-      se convierten a entero una vez descartadas las filas basura.
-    - IMPORTANTE - unidades: la nota al pie dice "convertí a unidades de
-      USD", es decir los valores de VALOR ya están en USD corrientes,
-      NO en miles de USD como sugiere el nombre de columna VAB_miles_usd
-      del script base del reto. Esta función expone la columna tal cual
-      viene (vab_usd). Si necesitas exactamente "miles de USD" para que
-      calce con el nombre de columna del DDL sugerido, divide entre 1000
-      al cargar (ver load_to_sqlite.py, está comentado ahí).
-    """
+    
     df = pd.read_excel(ruta_vab, sheet_name="DATA")
 
     # Descartar filas donde AÑO es nulo (las 2 filas vacías) o es texto
@@ -218,31 +154,7 @@ def limpiar_vab(ruta_vab: str) -> pd.DataFrame:
 # 4. PRECIO PETRÓLEO Y RIESGO PAÍS
 # ---------------------------------------------------------------------------
 def limpiar_petroleo_riesgo(ruta_petroleo: str, ruta_riesgo: str) -> pd.DataFrame:
-    """
-    Fuentes: PETRÓLEO.xlsx y RIESGO PAÍS.xlsx (archivos separados, hoja 'Ark1'
-    en ambos). El reto anticipaba que podían venir juntos o separados;
-    en este caso vienen separados, así que se limpian por separado y
-    se combinan con un merge por fecha.
-
-    Estructura cruda observada (idéntica en ambos archivos):
-    - La fila 0 de datos (según pandas, que ya usó la fila real 0 del Excel
-      como encabezado) contiene en realidad los verdaderos nombres de
-      columna como si fueran datos: ['Período', 'Precio Petróleo (WTI)...'].
-      Esto pasa porque el Excel probablemente tiene celdas combinadas o un
-      título genérico arriba que pandas toma como encabezado por error.
-    - Por eso se lee con header=None y skiprows=2, saltando tanto la fila
-      que pandas hubiera tomado como header como la fila-encabezado real
-      que viene mezclada como dato, y se asignan los nombres de columna
-      manualmente.
-    - Frecuencia diaria, sin nulos, sin duplicados en la muestra revisada.
-    - PETRÓLEO cubre 2025-01-01 a 2026-02-02 (399 filas).
-    - RIESGO PAÍS cubre 2025-01-02 a 2026-02-02 (308 filas) — tiene menos
-      filas que petróleo porque el riesgo país no se publica en fines de
-      semana/feriados, mientras que el archivo de petróleo sí trae esas
-      fechas. El merge por fecha dejará NaN en riesgo_pais_pb para esas
-      fechas sin publicación; es correcto, no se debe rellenar
-      artificialmente.
-    """
+    
     petroleo = pd.read_excel(
         ruta_petroleo, sheet_name="Ark1", header=None, skiprows=2,
         names=["fecha", "precio_petroleo_wti"]
@@ -275,41 +187,7 @@ def limpiar_petroleo_riesgo(ruta_petroleo: str, ruta_riesgo: str) -> pd.DataFram
 # 5. IEE - EXPECTATIVAS EMPRESARIALES
 # ---------------------------------------------------------------------------
 def limpiar_iee(ruta_iee: str) -> pd.DataFrame:
-    """
-    Fuente: IEE.xlsx, hoja 'IEE'.
-
-    Estructura cruda observada:
-    - 6 columnas sin nombre. Las primeras ~5 filas son NaN en todas las
-      columnas (espacio visual del Excel antes de la tabla real).
-    - La última fila es una nota de texto larga con la metodología del
-      índice ("(1) Representa un punto de equilibrio...") que hay que
-      descartar.
-    - Las fechas vienen como texto 'AAAA-MM-DD' (confirmado: el reto ya
-      anticipaba este formato).
-    - NO se pudo confirmar visualmente en qué fila exacta está el
-      encabezado de texto (Fecha/IEE Global/Comercio/Construcción/
-      Manufactura/Servicios) porque no apareció en el head(5)/tail(5) de
-      la exploración inicial. Para no adivinar el nombre de columna,
-      esta función:
-        1. Busca automáticamente la primera fila donde la columna 0 hace
-           match con el patrón de fecha AAAA-MM-DD (esa es la primera
-           fila de datos real, sin importar cuántas filas vacías haya
-           antes).
-        2. Asigna los nombres de columna de forma FIJA según el orden que
-           describe el propio reto y la nota metodológica del archivo
-           (Fecha, IEE_global, Comercio, Construccion, Manufactura,
-           Servicios) — el reto solo pide las primeras 4 columnas de
-           indicador (IEE_global, Comercio, Construccion, Manufactura),
-           así que Servicios se conserva pero es opcional para tus vistas
-           Gold.
-
-    ⚠️ Verificación pendiente: antes de dar esto por bueno, abre
-    IEE.xlsx en Excel y confirma visualmente que la fila justo antes del
-    primer dato (columna 0 = una fecha) efectivamente dice
-    Fecha/IEE Global/Comercio/Construcción/Manufactura/Servicios en ese
-    orden. Si el orden real de las columnas es distinto, ajusta la lista
-    `nombres_columnas` de esta función.
-    """
+    
     df = pd.read_excel(ruta_iee, sheet_name="IEE", header=None)
 
     patron_fecha = re.compile(r'^\d{4}-\d{2}-\d{2}$')
