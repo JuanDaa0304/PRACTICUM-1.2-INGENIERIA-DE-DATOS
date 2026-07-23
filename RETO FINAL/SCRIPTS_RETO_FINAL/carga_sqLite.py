@@ -12,6 +12,9 @@ from Limpieza.limpieza_bce import (
     limpiar_petroleo_riesgo,
     limpiar_iee,
 )
+from Limpieza.limpieza_supercias import (
+    limpiar_supercias,
+)
 
 from Limpieza.limpieza_mineduc import (
     limpiar_mineduc,
@@ -27,12 +30,13 @@ def main():
     print("Limpiando fuentes BCE...\n")
 
     # ===============================
-    # 📥 LECTURA DESDE BRONZE
+    # LECTURA DESDE BRONZE
     # ===============================
 
     pib_real = limpiar_pib_real(f"{RUTA_BRONZE}/retropolacion_1965_2023_PIB real.xlsx")
     pib_nominal = limpiar_pib_nominal(f"{RUTA_BRONZE}/PIB.xlsx")
     vab = limpiar_vab(f"{RUTA_BRONZE}/VAB 2018-2023.xlsx")
+    supercias = limpiar_supercias(f"{RUTA_BRONZE}/supercias.sql")
 
     petroleo_riesgo = limpiar_petroleo_riesgo(
         f"{RUTA_BRONZE}/PETRÓLEO.xlsx",
@@ -44,7 +48,7 @@ def main():
 
 
     # ===============================
-    # 🔍 VALIDACIONES (solo algunas)
+    # VALIDACIONES (solo algunas)
     # ===============================
 
     print("\n--- PIB REAL HEAD ---")
@@ -61,13 +65,28 @@ def main():
     # ===============================
 
     # 🔹 DIMENSIÓN TIEMPO
-    dim_tiempo = pib_real[["anio"]].copy()
+    # OJO: antes esto se armaba solo con los años de pib_real (1965-2023),
+    # pero vab e iee ya traen años que pib_real no tiene (ej. 2024). Eso
+    # dejaba filas de fact_vab/fact_iee con id_tiempo = NULL después del
+    # merge (se verificó: 1,000 filas en fact_vab y 24 en fact_iee).
+    # Se arma la dimensión con la UNIÓN de años de todas las fuentes
+    # anuales para que ningún año se quede sin id_tiempo.
+    anios_pib_real = set(pib_real["anio"].dropna().astype(int))
+    anios_vab = set(vab["anio"].dropna().astype(int))
+    anios_iee = set(iee["fecha"].dropna().dt.year.astype(int))
+    todos_los_anios = sorted(anios_pib_real | anios_vab | anios_iee)
+
+    dim_tiempo = pd.DataFrame({"anio": todos_los_anios})
     dim_tiempo["fecha"] = pd.to_datetime(dim_tiempo["anio"].astype(str) + "-01-01")
     dim_tiempo["mes"] = 1
     dim_tiempo["trimestre"] = 1
 
     dim_tiempo = dim_tiempo.reset_index(drop=True)
     dim_tiempo["id_tiempo"] = dim_tiempo.index + 1
+
+    anios_faltantes_antes = (anios_vab | anios_iee) - anios_pib_real
+    if anios_faltantes_antes:
+        print(f"[dim_tiempo] Años agregados que no estaban en pib_real: {sorted(anios_faltantes_antes)}")
 
     # 🔹 FACT MACRO
     fact_macro = pib_real.merge(
@@ -156,18 +175,30 @@ def main():
     fact_vab["id"] = fact_vab.index + 1
 
     # ordenar columnas
+    # es_total viene de limpiar_vab(): True en la fila "ECONOMÍA TOTAL"
+    # (subtotal de los otros 14 sectores). Se conserva la columna para que
+    # el dashboard pueda:
+    #   - WHERE es_total = 0  -> sumar vab_usd por sector sin duplicar
+    #   - WHERE es_total = 1  -> usar directo el total anual ya calculado
     fact_vab = fact_vab[
         [
             "id",
             "id_tiempo",
             "id_geo",
             "sector",
-            "vab_usd"
+            "vab_usd",
+            "es_total"
         ]
     ]
 
+    n_null_tiempo = fact_vab["id_tiempo"].isna().sum()
+    if n_null_tiempo:
+        print(f"[fact_vab] Aviso: {n_null_tiempo} filas sin id_tiempo (año no encontrado en dim_tiempo).")
+
     print("\n--- FACT VAB ---")
     print(fact_vab.head())
+    print(f"[fact_vab] {fact_vab['es_total'].sum()} filas son subtotal 'ECONOMÍA TOTAL' "
+          f"(es_total=True) -- excluir con WHERE es_total = 0 al sumar por sector.")
 
     # ===============================
     # 🔹 FACT IEE
@@ -209,7 +240,7 @@ def main():
     print("\n--- FACT IEE ---")
     print(fact_iee.head())
 
-        # ===============================
+    # ===============================
     # 🔹 FACT MINEDUC
     # ===============================
 
@@ -264,6 +295,7 @@ def main():
     petroleo_riesgo.to_csv(f"{RUTA_SILVER}/silver_petroleo_riesgo.csv", index=False)
     iee.to_csv(f"{RUTA_SILVER}/silver_iee.csv", index=False)
     mineduc.to_csv(f"{RUTA_SILVER}/silver_mineduc.csv", index=False)
+    supercias.to_csv(f"{RUTA_SILVER}/silver_supercias.csv", index=False)
 
     print("\n📁 CSVs silver guardados correctamente")
 
@@ -288,6 +320,7 @@ def main():
     dim_geografia.to_sql("dim_geografia", conn, if_exists="replace", index=False)
     fact_iee.to_sql("fact_iee", conn, if_exists="replace", index=False)
     fact_mineduc.to_sql("fact_mineduc", conn, if_exists="replace", index=False)
+    supercias.to_sql("fact_supercias", conn, if_exists="replace", index=False)
 
     conn.close()
 
@@ -298,6 +331,7 @@ def main():
     print(f"  petroleo_riesgo:  {len(petroleo_riesgo)}")
     print(f"  iee:              {len(iee)}")
     print(f"  mineduc:          {len(mineduc)}")
+    print(f"  supercias:        {len(supercias)}")
 
 
     print(f"\n Todo cargado correctamente en {RUTA_BD}")

@@ -60,6 +60,15 @@ def limpiar_pib_real(ruta_retropolacion: str) -> pd.DataFrame:
     for col in ["pib_real_musd", "poblacion", "pib_percapita_real", "variacion_pct"]:
         datos[col] = pd.to_numeric(datos[col], errors="coerce")
 
+    # Redondeo: el Excel del BCE trae arrastre de decimales de la fórmula
+    # original (ej. 115433.5557576944). No aporta precisión real y solo
+    # ensucia el dato en el dashboard, así que se redondea aquí, una sola
+    # vez, para que CSV/XLSX/SQLite ya salgan limpios.
+    datos["pib_real_musd"] = datos["pib_real_musd"].round(1)
+    datos["poblacion"] = datos["poblacion"].round(0).astype("Int64")
+    datos["pib_percapita_real"] = datos["pib_percapita_real"].round(2)
+    datos["variacion_pct"] = datos["variacion_pct"].round(2)
+
     datos = datos.sort_values("anio").reset_index(drop=True)
 
     # Nota de limpieza (igual que con el PIB nominal): el primer año de la
@@ -134,8 +143,21 @@ def limpiar_vab(ruta_vab: str) -> pd.DataFrame:
     datos["sector"] = datos["SECTOR"].str.strip()
     datos["vab_usd"] = pd.to_numeric(datos["VALOR"], errors="coerce")
 
+    # IMPORTANTE: el Excel del BCE incluye, por cada año/cantón, una fila
+    # "ECONOMÍA TOTAL" que es el subtotal de los otros 14 sectores (se
+    # verificó: sum(14 sectores) == valor de la fila "ECONOMÍA TOTAL",
+    # 0% de diferencia). Si no se marca, cualquier SUM(vab_usd) sin filtrar
+    # duplica el valor real (ej. PIB de $114B sale como $228B).
+    #
+    # No se elimina la fila -- se conserva la información pero se marca con
+    # `es_total`, para que quien consuma la tabla decida: filtrar es_total
+    # == False para sumar por sector, o usar es_total == True para tener
+    # el total anual ya calculado sin tener que sumar nada.
+    datos["es_total"] = datos["sector"].str.upper() == "ECONOMÍA TOTAL"
+
     datos = datos[[
-        "anio", "cod_provincia", "provincia", "cod_canton", "canton", "sector", "vab_usd"
+        "anio", "cod_provincia", "provincia", "cod_canton", "canton",
+        "sector", "vab_usd", "es_total"
     ]].reset_index(drop=True)
 
     antes = len(datos)
@@ -146,6 +168,10 @@ def limpiar_vab(ruta_vab: str) -> pd.DataFrame:
     nulos_vab = datos["vab_usd"].isna().sum()
     if nulos_vab:
         print(f"[vab] Aviso: {nulos_vab} filas con VALOR no numérico quedaron como NaN.")
+
+    n_total = datos["es_total"].sum()
+    print(f"[vab] {n_total} filas marcadas como 'ECONOMÍA TOTAL' (es_total=True). "
+          f"Excluir estas filas al hacer SUM(vab_usd) por sector para no duplicar el total.")
 
     return datos
 
@@ -259,5 +285,3 @@ if __name__ == "__main__":
     print(iee.head())
     print(iee.tail())
     print(iee.dtypes, "\n")
-
-    
